@@ -1,5 +1,76 @@
 # @cotal-ai/core
 
+## 0.49.0
+
+### Minor Changes
+
+- 36d1779: Issued authority and run admission (SPEC 13.15, 14.8). A static credential is now an issuance: the issuer records its permission ceiling as evidence under a fresh generation before the material exists, its endpoint rows ride the versioned `ep.v1` rail with that generation pinned beside the caller triple, and a connected client reads its generation from an issuer-written accepted row. A hosted workflow run is admitted under the starting caller's resolved ceiling, recorded once per run in a dedicated admission store the driver cannot write, checked before every channel effect (wait open, fetch, recorded re-read, conclave writes), and revoked by an independent create-only marker that ends open waits at their next poll and refuses resume, takeover and reconcile. `run-start` on the legacy rail is refused with `permission-denied` and the `ai.cotal.ep.unbound-caller-authority` detail. `cotal run start --local` takes `--admit-read` and `--admit-publish` (required) and `cotal run revoke <runId> --local --by <who> --reason <text>` writes the marker. Three new per-space stores (`cotal_issued_`, `cotal_accepted_`, `cotal_admission_`), immutable at the broker: the admission and accepted stores are write-once per key, the evidence store is append-only and read first-on-key, and all three refuse rollup headers, message deletes and purges, so a holder of its own key row can neither widen nor erase what was recorded. Two new one-shot profiles (`issuer`, `run-admitter`), an admission read on the run mediator and operator profiles, and `COTAL_ACCEPTED_TOKEN` on every connector's spawn environment. Breaking pre-1.0 authority change.
+- c9ea091: Reclaim an endpoint governance slot left held by a stopped registration
+
+  An instance that stopped between taking the endpoint governance slot and publishing its spec left
+  the slot held with no registration behind it, and every later registration for that endpoint
+  refused while nothing was actually in flight. Neither documented recovery reached it:
+  `cotal reconcile-gate` reopens the holder's issuance gate and does not write the slot, and
+  `cotal deregister-instance` has no registration to remove.
+
+  `registerServiceInstance` now decides whether a foreign-held slot is abandoned instead of refusing
+  unconditionally. A slot is reclaimable only when the holder's issuance gate has reopened past the
+  generation the slot is stamped with, which proves the hold can never be promoted, since a promote
+  requires that same generation still frozen. The holder's gate is read through a new optional
+  `observeHolderGeneration` seam, mirroring `deregisterServiceInstance`'s `observeGeneration`, and
+  `readEndpointGateGeneration` is exported for callers to wire it. The manager wires it over the
+  auth-bucket read its existing registration credential already holds. No new grant and no new writer:
+  the registration path remains the governance head's only writer.
+
+  Everything else still refuses, and the refusals are the point. A slot whose holder's gate is still
+  at the stamped generation is a live registration and is never taken. An absent seam, an unreadable
+  gate, a garbled generation, and an observation behind the stamp all refuse. The conflict message
+  now names a remedy that reaches the state rather than one that does not.
+
+  SPEC §13.7 states the liveness guarantee this closes: a registration that stops before its spec
+  publication must not block an endpoint's registrations permanently, the abandoned determination
+  must rest on durable facts rather than a liveness probe, and an implementation that cannot make it
+  must refuse.
+
+### Patch Changes
+
+- 348b8b7: Surface a broker-refused instance-rail invoke as permission-denied naming the subject, instead of waiting out the call deadline.
+- 5079c89: Rebind a presence watch that goes silent under a live connection, and stop `cotal ps` from printing a liveness verdict while the manager's own presence view is stale.
+
+  On netcup on 2026-09-09 the presence stream was deleted and recreated while the manager kept its
+  connection. Its ordered consumer re-created itself from the old cursor against a stream whose
+  sequence had restarted, the broker kept sending it idle heartbeats, and nothing ever re-created the
+  watch. The manager's roster froze at the pre-recreation snapshot for hours: `cotal ps` printed
+  `mesh offline` for every seat older than the freeze and `not in roster` for every seat younger,
+  while a fresh observer saw all of them heartbeating. The lane watchdog stopped a working
+  orchestrator twice on that reading.
+
+  The endpoint's sweep already refused to age peers out while the whole bucket was silent and marked
+  the view stale; that was the right verdict for a held link and the wrong end state for a dead
+  consumer. When the view is stale and the transport is up, the endpoint now stops the old watch and
+  binds a new one from the bucket's current state, once per liveness window, and reports the rebind
+  as a warning that names the silent interval. The per-peer age-out also requires that the watch
+  delivered for a full window after the peer's last heartbeat, so an observer's own deafness no longer
+  emits one offline verdict per peer on the tick before the whole-bucket gate trips. A rebind that
+  is still awaiting the broker when the endpoint stops or rebuilds its connection is retired: it
+  installs nothing and reports nothing, so a stopped endpoint never regains a watch and a rebuilt
+  one keeps the watch its fresh connection bound. A rebind that lands on a bucket with no keys is
+  read two ways. An observer that does not register (a probe) learns that nobody is present: it
+  retires every peer still in its roster and holds the view current until the first write, instead of
+  reading its own silence as staleness and rebinding once per window while the mesh is empty. An
+  observer that registers (the manager) is one of the missing keys, so the bucket was wiped since its
+  last heartbeat: it re-publishes its own record, the new watch delivers it, and every other peer is
+  re-observed or aged out from that delivery. It never marks itself offline on a current view.
+
+  Each `ps` row now carries the manager's presence-view state (`meshView`: `current`, `stale`, or
+  `unpopulated`), and the CLI prints `mesh unknown` with the reason instead of `mesh offline` or
+  `not in roster` whenever that state is not `current`. Rows from an older manager carry no field and
+  render as before.
+
+- 5395c7c: Report a refused presence-KV write by naming the bucket and how long writes have been refused, instead of asserting the mesh is unreachable while the transport is connected. A latched presence bucket still opens and watches cleanly, so only the write reveals it; bind now fails with that detail rather than a bare timeout, and `cotal_connection_status` carries a distinct `presenceWriteFailure` field. The record is connection-scoped: it is cleared whenever a connection is torn down, rebuilt or stopped, so a later failure on a different connection cannot inherit it and be described as a bucket refusal.
+
+  Clearing on teardown is not sufficient on its own, because a presence put can still be in flight when the teardown runs. A rebind reaches `publishPresence` through the empty-bucket path and nothing awaits that flight, so a put started on one connection could settle after the record was cleared and write its refusal onto a stopped endpoint or onto the connection that replaced it. The put now carries the same epoch fence the presence watch bind takes: a put that outlives its epoch still throws to its caller, and it no longer writes presence-refusal state that belongs to a later connection. A late success is fenced the same way, so it cannot erase a refusal the current connection established from its own evidence.
+
 ## 0.48.2
 
 ## 0.48.1

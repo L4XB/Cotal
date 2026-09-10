@@ -1,5 +1,17 @@
 # @cotal-ai/auth
 
+## 0.49.0
+
+### Patch Changes
+
+- Updated dependencies [348b8b7]
+- Updated dependencies [36d1779]
+- Updated dependencies [c9ea091]
+- Updated dependencies [5079c89]
+- Updated dependencies [5395c7c]
+  - @cotal-ai/core@0.49.0
+  - @cotal-ai/workspace@0.49.0
+
 ## 0.48.2
 
 ### Patch Changes
